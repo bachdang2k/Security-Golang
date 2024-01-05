@@ -1,7 +1,6 @@
 package services
 
 import (
-	"crypto/internal/nistec"
 	"database/sql"
 	"log"
 	"os"
@@ -163,18 +162,56 @@ func (service *AuthService) ValidateTwoFactor(code, requestId, ipAddress, userAg
 
 	var userId uint
 	err := service.db.Model(&models.TwoFactorRequest{}).Select("id").Where("code = ? AND request_id = ? AND Expire_Time > NOW()", code, requestId).First(&userId).Error
-	
+
 	if userId == 0 || err != nil {
 		log.Println("Invalid Code ", err)
 		return nil, ErrTwoFactorCode
 	}
 
-	if err := service.db.Model(&models.TwoFactorRequest{}).Raw("DELETE FROM two_factor_requests WHERE code = ? AND request_id = ?", code, requestId).Exec().Error; err != nil {
+	if err := service.db.Model(&models.TwoFactorRequest{}).Exec("DELETE FROM two_factor_requests WHERE code = ? AND request_id = ?", code, requestId).Error; err != nil {
 		log.Println(err)
 		return nil, ErrTwoFactorCode
 	}
-		
+
 	userDetail := service.userService.Get(int(userId))
 	return service.generateTokenDetails(*userDetail, ipAddress, userAgent)
 
+}
+
+// Delete expired tokens
+func (service *AuthService) DeleteExpiredTokens(days int) error {
+
+	ch := make(chan error, 3)
+
+	go func() {
+		err := service.db.Exec("DELETE FROM user_refresh_tokens WHERE (DATE_PART('day', AGE(NOW()::date ,expiry_time::date))) >= ?", days).Error
+		if err != nil {
+			ch <- nil
+		}
+	}()
+
+	go func() {
+		// Deletes Two factor requests
+		err := service.db.Exec("DELETE FROM two_factor_requests WHERE (DATE_PART('day', AGE(NOW()::date ,expiry_time::date))) >= ?", days).Error
+		if err != nil {
+			ch <- nil
+		}
+	}()
+
+	go func() {
+		// Delete Reset Password Requests
+		err := service.db.Exec("DELETE FROM reset_password_requests WHERE (DATE_PART('day', AGE(NOW()::date ,expiry_time::date))) >= ?", days).Error
+		if err != nil {
+			ch <- nil
+		}
+	}()
+
+	// Deletes User Refresh tokens
+	for i := 0; i < 3; i++ {
+		if receice := <-ch; receice != nil {
+			return receice
+		}
+	}
+
+	return nil
 }
