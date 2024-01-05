@@ -1,0 +1,33 @@
+version: '3.8'
+services:
+  postgresqldb:
+    image: postgres:14.1-alpine
+    restart: always
+    ports:
+     - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=kien270900
+      - POSTGRES_DB=jwt_golang
+    
+  migratedb:
+    image: migrate/migrate
+    volumes:
+      - ./db/migrations:/migrations
+    entrypoint:
+      [
+        "migrate",
+        "-path",
+        "/migrations",
+        "-database",
+        "postgres://postgres:kien270900@postgresqldb:5432/jwt_golang?sslmode=disable",
+      ]
+    command: ["up"]
+    depends_on:
+      - postgresqldb
+    links:
+     - postgresqldb
+    restart: on-failure   
+
+
+    
