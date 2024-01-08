@@ -72,12 +72,16 @@ func GetMainDatabaseConnections(config DatabaseConfig) (*gorm.DB, error) {
 	databaseConnection.SetConnMaxIdleTime(15 * time.Second)
 	databaseConnection.SetConnMaxIdleTime(30 * time.Second)
 
+	if err := MigrateDatabase(db); err != nil {
+		return nil, err
+	}
+
 	return db, nil
 }
 
 func MigrateDatabase(db *gorm.DB) error {
 	DropUnusedColumns(db, &models.User{})
-	return db.AutoMigrate(&models.User{}, &models.TwoFactorRequest{}, &models.UserRefreshToken{})
+	return db.AutoMigrate(&models.User{}, &models.TwoFactorRequest{}, &models.UserRefreshToken{}, &models.ResetPasswordRequest{}, &models.Role{})
 }
 
 func DropUnusedColumns(db *gorm.DB, table interface{}) {
@@ -98,7 +102,10 @@ func DropUnusedColumns(db *gorm.DB, table interface{}) {
 			}
 		}
 		if !found {
-			db.Migrator().DropColumn(table, columns[i].Name())
+			err := db.Migrator().DropColumn(table, columns[i].Name())
+			if err != nil {
+				return
+			}
 		}
 	}
 }

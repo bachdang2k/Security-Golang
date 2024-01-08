@@ -2,12 +2,16 @@ package services
 
 import (
 	"database/sql"
+	"errors"
 	"log"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/bachdang2k/security-golang/internal/models"
 	"github.com/bachdang2k/security-golang/internal/utils"
+	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -29,21 +33,21 @@ func NewAuthService(db *gorm.DB) *AuthService {
 	}
 }
 
-// Login function to authenticate user by username and password
-func (authSrv *AuthService) LoginByUsernamePassword(username, password, ipAddress, userAgent string) (*models.AuthenticationResponse, error) {
+// LoginByUsernamePassword Login function to authenticate user by username and password
+func (service *AuthService) LoginByUsernamePassword(username, password, ipAddress, userAgent string) (*models.AuthenticationResponse, error) {
 	var (
 		userId       int
 		passwordHash string
 		err          error
 	)
 
-	row := authSrv.db.Model(&models.User{}).Select("id", "password").Where("username = ?", username).Row()
+	row := service.db.Model(&models.User{}).Select("id", "password").Where("username = ?", username).Row()
 	//row := authSrv.db.QueryRow("SELECT id, password FROM users WHERE username = $1  LIMIT 1 ", username)
 	row.Scan(&userId, &passwordHash)
 	if userId == 0 {
 		return nil, ErrInvalidUsername
 	}
-	userDetails := authSrv.userService.Get(userId)
+	userDetails := service.userService.Get(userId)
 	if !userDetails.Active {
 		return nil, ErrAccountNotActive
 	}
@@ -52,7 +56,7 @@ func (authSrv *AuthService) LoginByUsernamePassword(username, password, ipAddres
 	if err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidPassword
 	}
-	return authSrv.generateAuthResponse(*userDetails, ipAddress, userAgent)
+	return service.generateAuthResponse(*userDetails, ipAddress, userAgent)
 }
 
 func (service *AuthService) generateAuthResponse(userDetails models.User, ipAddress, userAgent string) (*models.AuthenticationResponse, error) {
@@ -128,7 +132,7 @@ func (service *AuthService) insert2FactorRequest(entity models.TwoFactorRequest,
 func (service *AuthService) generateTokenDetails(userDetails models.User, ipAddress string, userAgent string) (*models.AuthenticationResponse, error) {
 
 	authResult := &models.AuthenticationResponse{}
-	tokenExpiry := time.Duration(service.tokenTime)
+	tokenExpiry := service.tokenTime
 
 	token, err := utils.GenerateJwtToken(int(userDetails.ID), userDetails.Roles, tokenExpiry)
 	if err != nil {
@@ -157,7 +161,22 @@ func (service *AuthService) generateTokenDetails(userDetails models.User, ipAddr
 	return authResult, nil
 }
 
-// Validate the two factor authentication request and complete the authentication request
+// VerifyAndSetNewPassWord Verify And Set New-Password functions to verify and reset password
+func (service *AuthService) VerifyAndSetNewPassWord(code string, password string) (bool, error) {
+
+	if !utils.IsStrongPassword(password) {
+		return false, ErrStrongPassword
+	}
+
+	var userId uint
+	err := utils.Transaction(service.db, func(db *gorm.DB) error {
+		var 
+	})
+
+	return true, nil
+}
+
+// ValidateTwoFactor Validate the two factors authentication request and complete the authentication request
 func (service *AuthService) ValidateTwoFactor(code, requestId, ipAddress, userAgent string) (*models.AuthenticationResponse, error) {
 
 	var userId uint
@@ -178,40 +197,69 @@ func (service *AuthService) ValidateTwoFactor(code, requestId, ipAddress, userAg
 
 }
 
-// Delete expired tokens
+// DeleteExpiredTokens Delete expired tokens
 func (service *AuthService) DeleteExpiredTokens(days int) error {
 
 	ch := make(chan error, 3)
+	var errArr []string
+
+	var wg sync.WaitGroup
 
 	go func() {
 		err := service.db.Exec("DELETE FROM user_refresh_tokens WHERE (DATE_PART('day', AGE(NOW()::date ,expiry_time::date))) >= ?", days).Error
+		wg.Add(1)
 		if err != nil {
-			ch <- nil
+			ch <- err
 		}
 	}()
 
 	go func() {
 		// Deletes Two factor requests
 		err := service.db.Exec("DELETE FROM two_factor_requests WHERE (DATE_PART('day', AGE(NOW()::date ,expiry_time::date))) >= ?", days).Error
+		wg.Add(1)
 		if err != nil {
-			ch <- nil
+			ch <- err
 		}
 	}()
 
 	go func() {
 		// Delete Reset Password Requests
 		err := service.db.Exec("DELETE FROM reset_password_requests WHERE (DATE_PART('day', AGE(NOW()::date ,expiry_time::date))) >= ?", days).Error
+		wg.Add(1)
 		if err != nil {
-			ch <- nil
+			ch <- err
 		}
 	}()
 
+	wg.Done()
 	// Deletes User Refresh tokens
 	for i := 0; i < 3; i++ {
-		if receice := <-ch; receice != nil {
-			return receice
+		if receive := <-ch; receive != nil {
+			errArr = append(errArr, receive.Error())
 		}
 	}
 
+	if errArr != nil {
+		return errors.New(strings.Join(errArr, " _ "))
+	}
+
 	return nil
+}
+
+// VerifyPassCode Verify the passcode
+func (service *AuthService) VerifyPassCode(userId uint, passCode string) bool {
+	userDetail := service.userService.Get(int(userId))
+	if totp.Validate(passCode, userDetail.TOTPSecret) {
+		return true
+	}
+	return false
+}
+
+// VerifyOTP Validates the TOTP before the user finally logs in
+func (service *AuthService) VerifyOTP(userId uint, passCode, ipAddress, userAgent string) (*models.AuthenticationResponse, error) {
+	userDetails := service.userService.Get(int(userId))
+	if !service.VerifyPassCode(userId, passCode) {
+		return nil, ErrPassCode
+	}
+	return service.generateTokenDetails(*userDetails, ipAddress, userAgent)
 }

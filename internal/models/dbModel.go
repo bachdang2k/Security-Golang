@@ -9,19 +9,19 @@ import (
 type User struct {
 	gorm.Model
 	//ID               int      `json:"-"`
-	UUID             string   `json:"id"`
-	Username         string   `json:"username"`
-	EmailAddress     string   `json:"emailAddress"`
-	FirstName        string   `json:"firstName"`
-	LastName         string   `json:"lastName"`
-	CellNumber       string   `json:"cellNumber"`
-	Roles            []string `json:"roles"`
-	Active           bool     `json:"active"`
-	TwoFactorEnabled bool     `json:"twoFactorEnabled"`
-	TwoFactorMethod  string   `json:"twoFactorMethod"`
-	TOTPSecret       string   `json:"-"`
-	TOTPURL          string   `json:"-"`
-	Metadata         JSONB    `json:"metadata"`
+	UUID             string  `json:"id"`
+	Username         string  `json:"username"`
+	EmailAddress     string  `json:"emailAddress"`
+	FirstName        string  `json:"firstName"`
+	LastName         string  `json:"lastName"`
+	CellNumber       string  `json:"cellNumber"`
+	Roles            []*Role `json:"roles" gorm:"many2many:user_languages;"`
+	Active           bool    `json:"active"`
+	TwoFactorEnabled bool    `json:"twoFactorEnabled"`
+	TwoFactorMethod  string  `json:"twoFactorMethod"`
+	TOTPSecret       string  `json:"-"`
+	TOTPURL          string  `json:"-"`
+	Metadata         JSONB   `json:"metadata"`
 }
 
 type TwoFactorRequest struct {
@@ -42,6 +42,18 @@ type UserRefreshToken struct {
 	IpAddress  string
 	UserAgent  string
 	ExpireTime sql.NullTime
+}
+
+type ResetPasswordRequest struct {
+	gorm.Model
+	UserId     uint
+	Code       string
+	ExpireTime sql.NullTime
+}
+
+type Role struct {
+	Id   uint `gorm:"primaryKey"`
+	Type string
 }
 
 // type EmailService struct {
