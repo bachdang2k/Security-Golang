@@ -68,7 +68,12 @@ func (service *AuthService) generateAuthResponse(userDetails models.User, ipAddr
 		// Otherwise its TOTP then
 		authResult := &models.AuthenticationResponse{}
 		// Generate a short token which expires after 5minutes
-		shortToken, _ := utils.GenerateJwtToken(int(userDetails.Model.ID), userDetails.Roles, 5*time.Minute)
+		var roles []string
+		for _, role := range userDetails.Roles {
+			roles = append(roles, role.Type)
+		}
+		roles = append(roles)
+		shortToken, _ := utils.GenerateJwtToken(int(userDetails.Model.ID), roles, 5*time.Minute)
 		authResult.TwoFactorEnabled = true
 		authResult.Token = shortToken
 		authResult.TwoFactorMethod = userDetails.TwoFactorMethod
@@ -76,12 +81,12 @@ func (service *AuthService) generateAuthResponse(userDetails models.User, ipAddr
 	}
 
 	// Get user roles
-	roles, err := service.userService.GetRoles(int(userDetails.Model.ID))
-	userDetails.Roles = roles
-	if err != nil {
-		log.Println(err)
-		return nil, err
-	}
+	//roles, err := service.userService.GetRoles(int(userDetails.Model.ID))
+	//userDetails.Roles = roles
+	//if err != nil {
+	//	log.Println(err)
+	//	return nil, err
+	//}
 	return service.generateTokenDetails(userDetails, ipAddress, userAgent)
 }
 
@@ -134,7 +139,7 @@ func (service *AuthService) generateTokenDetails(userDetails models.User, ipAddr
 	authResult := &models.AuthenticationResponse{}
 	tokenExpiry := service.tokenTime
 
-	token, err := utils.GenerateJwtToken(int(userDetails.ID), userDetails.Roles, tokenExpiry)
+	token, err := utils.GenerateJwtToken(int(userDetails.ID), getRoles(userDetails), tokenExpiry)
 	if err != nil {
 		log.Println(err)
 		return nil, ErrAccessToken
@@ -155,7 +160,7 @@ func (service *AuthService) generateTokenDetails(userDetails models.User, ipAddr
 
 	authResult.RefreshToken = refreshToken
 	authResult.Token = token
-	authResult.Roles = userDetails.Roles
+	authResult.Roles = getRoles(userDetails)
 	authResult.Expires = int(tokenExpiry.Seconds())
 	authResult.TwoFactorEnabled = userDetails.TwoFactorEnabled
 	return authResult, nil
@@ -168,10 +173,10 @@ func (service *AuthService) VerifyAndSetNewPassWord(code string, password string
 		return false, ErrStrongPassword
 	}
 
-	var userId uint
-	err := utils.Transaction(service.db, func(db *gorm.DB) error {
-		var 
-	})
+	//var userId uint
+	//err := utils.Transaction(service.db, func(db *gorm.DB) error {
+	//	var
+	//})
 
 	return true, nil
 }
@@ -262,4 +267,96 @@ func (service *AuthService) VerifyOTP(userId uint, passCode, ipAddress, userAgen
 		return nil, ErrPassCode
 	}
 	return service.generateTokenDetails(*userDetails, ipAddress, userAgent)
+}
+
+// PasswordLessLogin Func loginByUsername this will send an otp to the user which then be verified
+func (service *AuthService) PasswordLessLogin(username, sendMethod, ipAddress, userAgent string) (*models.PasswordLessAuthResponse, error) {
+	userDetails := service.userService.GetByUsername(username)
+	if userDetails == nil {
+		return nil, ErrInvalidUsername
+	}
+	if userDetails.Active == false {
+		return nil, ErrAccountNotActive
+	}
+
+	// Generates request ID
+	requestId := utils.GenerateOpaqueToken(45)
+	// Generate 6 random code
+	randomCodes := utils.GenerateRandomDigits(6)
+
+	err := utils.Transaction(service.db, func(db *gorm.DB) error {
+
+		otpRequest := models.OTPRequest{
+			UserId:     userDetails.ID,
+			RequestId:  requestId,
+			Code:       randomCodes,
+			SendMethod: "EMAIL",
+			ExpireTime: sql.NullTime{Time: time.Now().Add(1 * time.Minute), Valid: true},
+			IpAddress:  ipAddress,
+			UserAgent:  userAgent,
+		}
+
+		if err := service.db.Model(&models.OTPRequest{}).Create(&otpRequest).Error; err != nil {
+			return err
+		}
+
+		if err := service.emailService.SendEmailLoginRequest(randomCodes, *userDetails); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	var response = models.PasswordLessAuthResponse{RequestId: requestId, SendMethod: "EMAIL"}
+
+	return &response, nil
+}
+
+// CompletePasswordLessLogin Func completePasswordLessLogin
+func (service *AuthService) CompletePasswordLessLogin(code, requestId string) (*models.AuthenticationResponse, error) {
+
+	println(code, requestId)
+
+	var otpRequest models.OTPRequest
+	if err := service.db.Model(&models.OTPRequest{}).Where("code = ? AND request_id = ? AND expire_time >= NOW()", code, requestId).First(&otpRequest).Error; err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	userAgent := otpRequest.UserAgent
+	ipAddress := otpRequest.IpAddress
+
+	var userDetails models.User
+	if err := service.db.Model(&models.User{}).Where("id = ?", otpRequest.UserId).First(&userDetails).Error; err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	err := utils.Transaction(service.db, func(db *gorm.DB) error {
+
+		if err := service.db.Model(&models.OTPRequest{}).Delete(&otpRequest).Error; err != nil {
+			log.Println(err)
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return service.generateAuthResponse(userDetails, ipAddress, userAgent)
+}
+
+func getRoles(user models.User) []string {
+	var roles []string
+	for _, role := range user.Roles {
+		roles = append(roles, role.Type)
+	}
+	return roles
 }

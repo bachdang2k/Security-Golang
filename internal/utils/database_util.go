@@ -81,7 +81,7 @@ func GetMainDatabaseConnections(config DatabaseConfig) (*gorm.DB, error) {
 
 func MigrateDatabase(db *gorm.DB) error {
 	DropUnusedColumns(db, &models.User{})
-	return db.AutoMigrate(&models.User{}, &models.TwoFactorRequest{}, &models.UserRefreshToken{}, &models.ResetPasswordRequest{}, &models.Role{})
+	return db.AutoMigrate(&models.User{}, &models.TwoFactorRequest{}, &models.UserRefreshToken{}, &models.ResetPasswordRequest{}, &models.Role{}, &models.OTPRequest{})
 }
 
 func DropUnusedColumns(db *gorm.DB, table interface{}) {

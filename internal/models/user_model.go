@@ -1,7 +1,7 @@
 package models
 
 type EnableTwoFactorRequest struct {
-	Method string `json:"method"`
+	Type string `json:"type"`
 }
 
 type EnableTOTPResponse struct {

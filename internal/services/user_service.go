@@ -1,9 +1,15 @@
 package services
 
 import (
+	"database/sql"
+	"errors"
 	"log"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/bachdang2k/security-golang/internal/models"
+	"github.com/pquerna/otp/totp"
 	"gorm.io/gorm"
 )
 
@@ -18,7 +24,7 @@ func NewUserService(db *gorm.DB) *UserService {
 }
 
 // List a bunch of users
-func (usrSrv *UserService) List(offset int, limit int) ([]models.User, error) {
+func (service *UserService) List(offset int, limit int) ([]models.User, error) {
 	users := []models.User{}
 	//Get the list of users
 	queryString :=
@@ -39,7 +45,7 @@ func (usrSrv *UserService) List(offset int, limit int) ([]models.User, error) {
 	    `
 
 	//rows, err := usrSrv.db.Model(&models.User{}).Offset(offset).Limit(limit).Rows()
-	rows, err := usrSrv.db.Raw(queryString, offset, limit).Rows()
+	rows, err := service.db.Raw(queryString, offset, limit).Rows()
 	if err != nil {
 		return nil, err
 	}
@@ -48,8 +54,8 @@ func (usrSrv *UserService) List(offset int, limit int) ([]models.User, error) {
 		rows.Scan(&user.ID, &user.UUID, &user.Username, &user.FirstName,
 			&user.LastName, &user.CellNumber,
 			&user.EmailAddress, &user.Active, &user.TwoFactorEnabled)
-		roles, _ := usrSrv.GetRoles(int(user.Model.ID))
-		user.Roles = roles
+		//roles, _ := usrSrv.GetRoles(int(user.Model.ID))
+		//user.Roles = roles
 		users = append(users, user)
 	}
 
@@ -87,8 +93,8 @@ func (service *UserService) Get(userId int) *models.User {
 		&userDetails.TwoFactorMethod, &userDetails.TOTPSecret, &userDetails.TOTPURL, &userDetails.Metadata,
 	)
 
-	role, _ := service.GetRoles(int(userDetails.Model.ID))
-	userDetails.Roles = role
+	//role, _ := service.GetRoles(int(userDetails.Model.ID))
+	//userDetails.Roles = role
 	if err != nil {
 		log.Println(err)
 		return nil
@@ -96,10 +102,10 @@ func (service *UserService) Get(userId int) *models.User {
 	return userDetails
 }
 
-// GetUsername gets the usersDetails by username
-func (usrSrv *UserService) GetByUsername(username string) *models.User {
+// GetByUsername GetUsername gets the usersDetails by username
+func (service *UserService) GetByUsername(username string) *models.User {
 	user := models.User{}
-	if err := usrSrv.db.Model(&models.User{}).Where("username = ?", username).Or("email_address = ?", username).First(&user).Error; err != nil {
+	if err := service.db.Model(&models.User{}).Where("username = ?", username).Or("email_address = ?", username).First(&user).Error; err != nil {
 		log.Println("loi xay ra khi query user ", err)
 		return nil
 	}
@@ -107,7 +113,7 @@ func (usrSrv *UserService) GetByUsername(username string) *models.User {
 }
 
 // GetRoles gets a list of user roles
-func (usrSrv *UserService) GetRoles(userId int) ([]string, error) {
+func (service *UserService) GetRoles(userId int) ([]string, error) {
 	roles := []string{}
 	// Get user roles
 	queryString := `
@@ -120,7 +126,7 @@ func (usrSrv *UserService) GetRoles(userId int) ([]string, error) {
 		WHERE 
 			user_roles.user_id = ?
 	    `
-	rows, err := usrSrv.db.Raw(queryString, userId).Rows()
+	rows, err := service.db.Raw(queryString, userId).Rows()
 	defer rows.Close()
 	if err != nil {
 		return nil, err
@@ -132,4 +138,106 @@ func (usrSrv *UserService) GetRoles(userId int) ([]string, error) {
 	}
 	return roles, nil
 
+}
+
+func (service *UserService) Update(userId uint, request models.UserUpdateRequest) error {
+
+	var user *models.User
+
+	err := service.db.Model(&models.User{}).Where("id = ?", userId).First(user).Error
+	if err != nil {
+		log.Println("loi xay ra ", err)
+		return err
+	}
+	if user == nil {
+		return errors.New("user Not Found")
+	}
+
+	// Update first Name
+	if strings.Trim(request.FirstName, "") != "" {
+		user.FirstName = request.FirstName
+	}
+	// Update last Name
+	if strings.Trim(request.LastName, "") != "" {
+		user.LastName = request.LastName
+	}
+	// Update email Address
+	if strings.Trim(request.EmailAddress, "") != "" {
+		user.EmailAddress = request.EmailAddress
+	}
+	// Update cell number
+	if strings.Trim(request.CellNumber, "") != "" {
+		user.CellNumber = request.CellNumber
+	}
+
+	service.db.Model(&models.User{}).Save(user)
+
+	return nil
+}
+
+func (service *UserService) DeleteToken(userId uint, refreshToken string) (bool, error) {
+
+	var userRefreshToken *models.UserRefreshToken
+	if err := service.db.Model(&models.TokenRefreshRequest{}).Where("user_id = ? AND token = ?", userId, refreshToken).First(userRefreshToken).Error; err != nil {
+		log.Println("loi xay ra ", err)
+		return false, err
+	}
+
+	if rowsAff := service.db.Model(&models.UserRefreshToken{}).Delete(userRefreshToken).RowsAffected; rowsAff == 0 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func (service *UserService) Enable2Factor(userId uint, methodCode string) error {
+
+	var user *models.User
+	if rowsAff := service.db.Model(&models.User{}).Where("user_id = ?", userId).First(user).RowsAffected; rowsAff == 0 {
+		return errors.New("user Not Found")
+	}
+
+	user.TwoFactorEnabled = true
+	user.TwoFactorMethod = methodCode
+
+	if err := service.db.Model(&models.User{}).Updates(user).Error; err != nil {
+		log.Println("loi xay ra ", err)
+		return err
+	}
+
+	return nil
+}
+
+func (service *UserService) Enable2FactorTOTP(userId uint) (*models.EnableTOTPResponse, error) {
+
+	var userDetail *models.User
+	response := &models.EnableTOTPResponse{}
+
+	if rowsAff := service.db.Model(&models.User{}).Where("id = ?", userId).Find(userDetail).RowsAffected; rowsAff == 0 {
+		return response, errors.New("user Not Found")
+	}
+
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      os.Getenv("ISSUER_NAME"),
+		AccountName: userDetail.Username,
+		SecretSize:  50,
+	})
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	response.URL = key.URL()
+
+	userDetail.TwoFactorEnabled = true
+	userDetail.TwoFactorMethod = "TOTP"
+	userDetail.TOTPSecret = key.Secret()
+	userDetail.TOTPURL = key.URL()
+	userDetail.TOTPCreated = sql.NullTime{Time: time.Now(), Valid: true}
+
+	if err := service.db.Model(&models.User{}).Updates(userDetail).Error; err != nil {
+		return nil, err
+	}
+
+	return response, nil
 }

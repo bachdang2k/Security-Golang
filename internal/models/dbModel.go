@@ -21,7 +21,8 @@ type User struct {
 	TwoFactorMethod  string  `json:"twoFactorMethod"`
 	TOTPSecret       string  `json:"-"`
 	TOTPURL          string  `json:"-"`
-	Metadata         JSONB   `json:"metadata"`
+	TOTPCreated      sql.NullTime
+	Metadata         JSONB `json:"metadata"`
 }
 
 type TwoFactorRequest struct {
@@ -56,11 +57,14 @@ type Role struct {
 	Type string
 }
 
-// type EmailService struct {
-// 	SmtpHost         string
-// 	SmtpUsername     string
-// 	SmtpPassword     string
-// 	SmtpPort         string
-// 	FromEmailAddress string
-// 	Secure           bool
-// }
+type OTPRequest struct {
+	gorm.Model
+	UserId     uint
+	User       User   `gorm:"foreignKey:UserId"`
+	IpAddress  string `gorm:"size:40"`
+	UserAgent  string `gorm:"size:200"`
+	RequestId  string `gorm:"size:100,unique"`
+	Code       string `gorm:"size:6"`
+	ExpireTime sql.NullTime
+	SendMethod string `gorm:"size:20"`
+}

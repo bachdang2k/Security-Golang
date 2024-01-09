@@ -9,14 +9,14 @@ import (
 	"github.com/bachdang2k/security-golang/internal/models"
 )
 
-// GetUserId from bearer token stored in http header
+// GetUserIdFromHttpContext GetUserId from bearer token stored in http header
 func GetUserIdFromHttpContext(r *http.Request) int {
 	claims := r.Context().Value("claims").(map[string]interface{})
 	userId := claims["userId"].(int)
 	return userId
 }
 
-// Get JsonData from http request
+// GetJsonInput Get JsonData from http request
 func GetJsonInput(input interface{}, req *http.Request) error {
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -43,7 +43,7 @@ func JSONError(w http.ResponseWriter, error string, code int) {
 	generalErrorResponse.Success = false
 	generalErrorResponse.ErrorMessage = error
 
-	json.NewEncoder(w).Encode(generalErrorResponse)
+	_ = json.NewEncoder(w).Encode(generalErrorResponse)
 }
 
 // JSONResponse Send Json response messages
@@ -51,5 +51,5 @@ func JSONResponse(w http.ResponseWriter, result interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }
