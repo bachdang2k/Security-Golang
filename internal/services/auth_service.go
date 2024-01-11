@@ -59,6 +59,68 @@ func (service *AuthService) LoginByUsernamePassword(username, password, ipAddres
 	return service.generateAuthResponse(*userDetails, ipAddress, userAgent)
 }
 
+// GenerateRefreshToken Refresh Token generates a new refresh token that will be used to get a new access token and a refresh token
+func (service *AuthService) GenerateRefreshToken(oldRefreshToken, ipAddress, userAgent string) (*models.AuthenticationResponse, error) {
+	var token models.UserRefreshToken
+
+	service.db.Model(&models.UserRefreshToken{}).Select("user_id").Where("token = ? AND expired_time > NOW()", oldRefreshToken).First(&token)
+	userId := token.UserId
+	if userId == 0 {
+		log.Println("Refresh Token is not there")
+		return nil, ErrInvalidToken
+	}
+
+	// Check if account is active before refreshing token
+	userDetails := service.userService.Get(int(userId))
+	if !userDetails.Active {
+		return nil, ErrAccountNotActive
+	}
+	roles, _ := service.userService.GetRoles(int(userId))
+	tokenExpire := time.Duration(service.tokenTime)
+
+	jwtToken, err := utils.GenerateJwtToken(int(userId), roles, time.Duration(tokenExpire))
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	// Delete the old token and generate new access token and refresh token
+	refreshToken := utils.GenerateOpaqueToken(45)
+	err = utils.Transaction(service.db, func(db *gorm.DB) error {
+		if err := service.db.Model(&models.UserRefreshToken{}).Delete(&token).Error; err != nil {
+			log.Println("log khi xoa user refresh token", err)
+			return err
+		}
+
+		token.UserId = userId
+		token.Token = refreshToken
+		token.IpAddress = ipAddress
+		token.UserAgent = userAgent
+		token.ExpireTime = sql.NullTime{Time: time.Now().Add(tokenExpire), Valid: true}
+
+		if err := service.db.Model(&models.UserRefreshToken{}).Create(&tokenExpire).Error; err != nil {
+			log.Println("log khi them moi user refresh token", err)
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	response := &models.AuthenticationResponse{
+		RefreshToken: refreshToken,
+		Token:        jwtToken,
+		Roles:        roles,
+		Expires:      int(tokenExpire.Seconds()),
+	}
+
+	return response, nil
+
+}
+
 func (service *AuthService) generateAuthResponse(userDetails models.User, ipAddress, userAgent string) (*models.AuthenticationResponse, error) {
 	if userDetails.TwoFactorEnabled {
 		if userDetails.TwoFactorMethod != "TOTP" {
